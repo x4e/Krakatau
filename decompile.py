@@ -83,8 +83,8 @@ def deleteUnusued(cls):
     del cls.interfaces_raw, cls.cpool
     del cls.attributes
 
-def decompileClass(path=[], targets=None, outpath=None, skip_errors=False, add_throws=False, magic_throw=False):
-    out = script_util.makeWriter(outpath, '.java')
+def decompileClass(path=[], target=None, outpath=None, skip_errors=False, add_throws=False, magic_throw=False):
+    out = open(outPath, "w")
 
     e = Environment()
     for part in path:
@@ -94,33 +94,35 @@ def decompileClass(path=[], targets=None, outpath=None, skip_errors=False, add_t
     # random.shuffle(targets)
     with e, out:
         printer = visitor.DefaultVisitor()
-        for i,target in enumerate(targets):
-            print('processing target {}, {} remaining'.format(target, len(targets)-i))
+        try:
+            c = None
+            with open(target, "rb") as targetF:
+                stream = Reader(data=targetF.read())
+                c = ClassFile(stream)
+                c.env = e
+                e.classes[c.name] = c
+            
+            makeGraphCB = functools.partial(makeGraph, magic_throw)
+            source = printer.visit(javaclass.generateAST(c, makeGraphCB, skip_errors, add_throws=add_throws))
+        except Exception as err:
+            if not skip_errors:
+                raise
+            if isinstance(err, ClassLoaderError):
+                print('Failed to decompile {} due to missing or invalid class {}'.format(target, err.data))
+            else:
+                import traceback
+                print(traceback.format_exc())
+            return
 
-            try:
-                c = e.getClass(target.decode('utf8'))
-                makeGraphCB = functools.partial(makeGraph, magic_throw)
-                source = printer.visit(javaclass.generateAST(c, makeGraphCB, skip_errors, add_throws=add_throws))
-            except Exception as err:
-                if not skip_errors:
-                    raise
-                if isinstance(err, ClassLoaderError):
-                    print('Failed to decompile {} due to missing or invalid class {}'.format(target, err.data))
-                else:
-                    import traceback
-                    print(traceback.format_exc())
-                continue
+        # The single class decompiler doesn't add package declaration currently so we add it here
+        if '/' in target:
+            package = 'package {};\n\n'.format(escapeString(target.replace('/','.').rpartition('.')[0]))
+            source = package + source
 
-            # The single class decompiler doesn't add package declaration currently so we add it here
-            if '/' in target:
-                package = 'package {};\n\n'.format(escapeString(target.replace('/','.').rpartition('.')[0]))
-                source = package + source
-
-            filename = out.write(c.name.encode('utf8'), source)
-            print('Class written to', filename)
-            print(time.time() - start_time, ' seconds elapsed')
-            deleteUnusued(c)
-        print(len(e.classes) - len(targets), 'extra classes loaded')
+        out.write(source)
+        print(time.time() - start_time, ' seconds elapsed')
+        deleteUnusued(c)
+        print(len(e.classes) - 1, 'extra classes loaded')
 
 if __name__== "__main__":
     print(script_util.copyright)
@@ -152,7 +154,5 @@ if __name__== "__main__":
 
     if args.target.endswith('.jar'):
         path.append(args.target)
-
-    targets = script_util.findFiles(args.target, args.r, '.class')
-    targets = map(script_util.normalizeClassname, targets)
-    decompileClass(path, targets, args.out, args.skip, magic_throw=args.xmagicthrow)
+    
+    decompileClass(path, args.target, args.out, args.skip, magic_throw=args.xmagicthrow)
